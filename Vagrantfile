@@ -3,14 +3,23 @@
 
 server_ip = '192.168.1.110'
 default_router = '192.168.1.1'
+nameserver = '195.54.122.200'
 bridge = 'wlp5s0'
-agents = { 'agent1' => '192.168.1.111',
-           'agent2' => '192.168.1.112'
+agents = {
+  'agent1' => '192.168.1.111',
+  'agent2' => '192.168.1.112',
 }
 
 # Extra parameters in INSTALL_K3S_EXEC variable because of
 # K3s picking up the wrong interface when starting server and agent
 # https://github.com/alexellis/k3sup/issues/306
+
+network_script = <<-SHELL
+    sudo -i
+    ip route delete default 2>&1 >/dev/null || true; ip route add default via #{default_router}
+    cp /etc/resolv.conf /etc/resolv.conf.orig
+    sed 's/^nameserver.*/nameserver #{nameserver}/' /etc/resolv.conf.orig > /etc/resolv.conf
+    SHELL
 
 server_script = <<-SHELL
     sudo -i
@@ -29,8 +38,6 @@ EOF
     cp /var/lib/rancher/k3s/server/token /vagrant_shared
     cp /etc/rancher/k3s/k3s.yaml /vagrant_shared
     cp /etc/rancher/k3s/registries.yaml /vagrant_shared
-
-    ip route delete default 2>&1 >/dev/null || true; ip route add default via #{default_router}
     SHELL
 
 agent_script = <<-SHELL
@@ -47,34 +54,36 @@ mirrors:
       - "http://#{server_ip}:5000"
 EOF
     curl -sfL https://get.k3s.io | sh -
-
-    ip route delete default 2>&1 >/dev/null || true; ip route add default via #{default_router}
     SHELL
 
 Vagrant.configure('2') do |config|
   config.vm.box = 'generic/alpine314'
 
   config.vm.define 'server', primary: true do |server|
-    server.vm.hostname = 'multi'
-    server.vm.network 'public_network', ip: server_ip
-    server.vm.synced_folder './shared', '/vagrant_shared'
-    server.vm.provider 'virtualbox' do |vb|
+    v = server.vm
+    v.hostname = 'multi'
+    v.network 'public_network', bridge: bridge, ip: server_ip
+    v.synced_folder './shared', '/vagrant_shared'
+    v.provider 'virtualbox' do |vb|
       vb.memory = '4096'
       vb.cpus = '2'
     end
-    server.vm.provision 'shell', inline: server_script
+    v.provision 'shell', inline: server_script
+    v.provision 'shell', inline: network_script, run: 'always'
   end
 
   agents.each do |agent_name, agent_ip|
     config.vm.define agent_name do |agent|
-      agent.vm.hostname = agent_name
-      agent.vm.network 'public_network', ip: agent_ip
-      agent.vm.synced_folder './shared', '/vagrant_shared'
-      agent.vm.provider 'virtualbox' do |vb|
+      v = agent.vm
+      v.hostname = agent_name
+      v.network 'public_network', bridge: bridge, ip: agent_ip
+      v.synced_folder './shared', '/vagrant_shared'
+      v.provider 'virtualbox' do |vb|
         vb.memory = '4096'
         vb.cpus = '2'
       end
-      agent.vm.provision 'shell', inline: agent_script
+      v.provision 'shell', inline: agent_script
+      v.provision 'shell', inline: network_script, run: 'always'
     end
   end
 end
